@@ -8,9 +8,9 @@ import torch
 #inspired from https://github.com/josipd/torch-two-sample/tree/master/torch_two_sample
 
 eps = 0.5
-K = 50
+K = 5
 m = 100
-n = 500
+n = 50
 
 def generator(K, n):
     x1 = np.zeros(n)
@@ -67,6 +67,36 @@ def pdist(sample_1, sample_2, norm=2, eps=1e-5):
         differences = torch.abs(expanded_1 - expanded_2) ** norm
         inner = torch.sum(differences, dim=2, keepdim=False)
         return (eps + inner) ** (1. / norm)
+
+#def permutation_test_mat(np.ndarray[np.float32_t, ndim=2] matrix, int n_1, int n_2, int n_permutations, float a00=1, float a11=1, float a01=0):
+def permutation_test_mat(matrix, n_1, n_2, n_permutations, a00=1, a11=1, a01=0):
+    """Compute the p-value of the following statistic (rejects when high)
+        \sum_{i,j} a_{\pi(i), \pi(j)} matrix[i, j].
+    """
+    n = n_1 + n_2
+    pi = np.zeros(n, dtype=np.int8)
+    pi[n_1:] = 1
+    statistic = 0
+    larger = 0.
+    for sample_n in range(1 + n_permutations):
+        count = 0.
+        for i in range(n):
+            for j in range(i, n):
+                mij = matrix[i, j] + matrix[j, i]
+                if pi[i] == pi[j] == 0:
+                    count += a00 * mij
+                elif pi[i] == pi[j] == 1:
+                    count += a11 * mij
+                else:
+                    count += a01 * mij
+        if sample_n == 0:
+            statistic = count
+        elif statistic <= count:
+            larger += 1
+
+        np.random.shuffle(pi)
+
+    return larger / n_permutations
 
 class MMDStatistic:
     r"""The *unbiased* MMD test of :cite:`gretton2012kernel`.
@@ -149,21 +179,25 @@ class MMDStatistic:
         -------
         float
             The estimated p-value."""
-        if isinstance(distances, Variable):
+        if isinstance(distances, torch.autograd.Variable):
             distances = distances.data
-        return permutation_test_mat(distances.cpu().numpy(),
+        return permutation_test_mat(distances.numpy(),
                                     self.n_1, self.n_2,
                                     n_permutations,
                                     a00=self.a00, a11=self.a11, a01=self.a01)
 
 x1, x1bis, x2 = generator(K, n)
 stat = MMDStatistic(n,n)
-alphas = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 5, 10, 15, 20, 25, 30, 35, 100,
-      1e3, 1e4, 1e5, 1e6]
-stat(x1, x1bis, alphas)
-stat(x1, x2, alphas)
+alphas = [1e-3, 1e-2, 1e-1, 1, 5, 10, 15, 20, 25, 30, 1e2, 1e3]
+stat_x11, mmd_x11 = stat(x1, x1bis, alphas, ret_matrix = True)
+stat_x11, stat.pval(mmd_x11)
+stat_x12, mmd_x12 = stat(x1, x2, alphas, ret_matrix = True)
+stat_x12, stat.pval(mmd_x12)
+
 y1 = privatizer(x1, eps, K)
 y1bis = privatizer(x1bis, eps, K)
 y2 = privatizer(x2, eps, K)
-stat(y1, y1bis, alphas)
-stat(y1, y2, alphas)
+stat_y11, mmd_y11 = stat(y1, y1bis, alphas, ret_matrix = True)
+stat_y11, stat.pval(mmd_y11)
+stat_x12, mmd_y12 = stat(y1, y2, alphas, ret_matrix = True)
+stat_x12, stat.pval(mmd_y12)
