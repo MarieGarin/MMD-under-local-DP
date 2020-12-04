@@ -4,37 +4,34 @@ import random
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import torch
-
+from scipy import stats
 #inspired from https://github.com/josipd/torch-two-sample/tree/master/torch_two_sample
 
 eps = 0.5
-K = 5
-m = 100
-n = 50
+d = 10
+n = 30
+sd = 1
 
-def generator(K, n):
-    x1 = np.zeros(n)
-    x1bis = np.zeros(n)
-    x2 = np.zeros(n)
-    p1 = np.random.random(size = K)
-    p1 = p1/np.sum(p1)
-    p2 = np.random.random(size = K)
-    p2 = p2/np.sum(p2)
+def generator(n, d, sd):
+    x1 = np.zeros((n,d))
+    x1bis = np.zeros((n,d))
+    x2 = np.zeros((n,d))
+    theta1 = np.random.randn(d)
+    theta2 = np.random.randn(d)
     for i in range(n):
-        x1[i] = np.argmax(np.random.multinomial(1, p1))
-        x1bis[i] = np.argmax(np.random.multinomial(1, p1))
-        x2[i] = np.argmax(np.random.multinomial(1, p2))
-    return torch.from_numpy(x1.reshape((n, 1))), torch.from_numpy(x1bis.reshape((n, 1))), torch.from_numpy(x2.reshape((n, 1)))
+        x1[i] = theta1 + np.random.normal(0, sd)
+        x1bis[i] = theta1 + np.random.normal(0, sd)
+        x2[i] = theta2 + np.random.normal(0, sd)
+    return torch.from_numpy(x1), torch.from_numpy(x1bis), torch.from_numpy(x2)
 
-def privatizer(x, eps, K):
-    n = len(x)
-    y = np.zeros(n)
-    stamp = 1./(np.exp(eps) + K - 1)*np.ones(K)
+def privatizer(x, eps):
+    n, d = x1.shape
+    y = np.zeros((n, d))
+    T = (n*eps)**0.25
     for i in range(n):
-        p_priv = np.ndarray.copy(stamp)
-        p_priv[ int(x[i]) ] = np.exp(eps)/(np.exp(eps) + K - 1)
-        y[i] = np.argmax(np.random.multinomial(1, p_priv))
-    return torch.from_numpy(y.reshape((n, 1)))
+        for j in range(d):
+            y[i, j] = max(-T, min(x[i, j], T)) + 2*T*d*scipy.stats.laplace.rvs()/eps
+    return torch.from_numpy(y)
 
 def pdist(sample_1, sample_2, norm=2, eps=1e-5):
     r"""Compute the matrix of all squared pairwise distances.
@@ -186,7 +183,7 @@ class MMDStatistic:
                                     n_permutations,
                                     a00=self.a00, a11=self.a11, a01=self.a01)
 
-x1, x1bis, x2 = generator(K, n)
+x1, x1bis, x2 = generator(n, d, sd)
 stat = MMDStatistic(n,n)
 alphas = [1e-3, 1e-2, 1e-1, 1, 5, 10, 15, 20, 25, 30, 1e2, 1e3]
 stat_x11, mmd_x11 = stat(x1, x1bis, alphas, ret_matrix = True)
@@ -194,9 +191,9 @@ stat_x11, stat.pval(mmd_x11)
 stat_x12, mmd_x12 = stat(x1, x2, alphas, ret_matrix = True)
 stat_x12, stat.pval(mmd_x12)
 
-y1 = privatizer(x1, eps, K)
-y1bis = privatizer(x1bis, eps, K)
-y2 = privatizer(x2, eps, K)
+y1 = privatizer(x1, eps)
+y1bis = privatizer(x1bis, eps)
+y2 = privatizer(x2, eps)
 stat_y11, mmd_y11 = stat(y1, y1bis, alphas, ret_matrix = True)
 stat_y11, stat.pval(mmd_y11)
 stat_x12, mmd_y12 = stat(y1, y2, alphas, ret_matrix = True)
