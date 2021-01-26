@@ -9,40 +9,112 @@ import matplotlib as mpl
 
 #inspired from https://github.com/josipd/torch-two-sample/tree/master/torch_two_sample
 
-eps = 0.5
-delta =
-K = 5
-m = 100
-n = 50
-sigma = 0.1
-sens = [2,1]
+eps = 1
+delta = 0.1
+n = 300
+sd = 0.1
 
-def data_moons(n,sigma):
-    X, y = make_moons(n_samples=n,noise=sigma)
+def data_moons(n, sd, dist):
+    X, y = make_moons(n_samples=n, noise=sd)
     y = 2*y-1
+    V = np.transpose(X) + dist*y
+    return np.transpose(V), y
 
-    return X, y
-
-def generator(K, n):
-    x1 = np.zeros(n)
-    x1bis = np.zeros(n)
-    x2 = np.zeros(n)
-    p1 = np.random.random(size = K)
-    p1 = p1/np.sum(p1)
-    p2 = np.random.random(size = K)
-    p2 = p2/np.sum(p2)
+def generator(n, d, sd):
+    x1 = np.zeros((n,d))
+    x1bis = np.zeros((n,d))
+    x2 = np.zeros((n,d))
+    theta1 = np.random.randn(d)
+    theta2 = np.random.randn(d)
     for i in range(n):
-        x1[i] = np.argmax(np.random.multinomial(1, p1))
-        x1bis[i] = np.argmax(np.random.multinomial(1, p1))
-        x2[i] = np.argmax(np.random.multinomial(1, p2))
-    return torch.from_numpy(x1.reshape((n, 1))), torch.from_numpy(x1bis.reshape((n, 1))), torch.from_numpy(x2.reshape((n, 1)))
+        x1[i] = theta1 + np.random.normal(0, sd)
+        x1bis[i] = theta1 + np.random.normal(0, sd)
+        x2[i] = theta2 + np.random.normal(0, sd)
+    return torch.from_numpy(x1), torch.from_numpy(x1bis), torch.from_numpy(x2)
 
-def privatizer(x, eps, delta):
+########## from https://github.com/BorjaBalle/analytic-gaussian-mechanism   ###################################################
+from math import exp, sqrt
+from scipy.special import erf
+
+def calibrateAnalyticGaussianMechanism(epsilon, delta, GS, tol = 1.e-12):
+    """ Calibrate a Gaussian perturbation for differential privacy using the analytic Gaussian mechanism of [Balle and Wang, ICML'18]
+    Arguments:
+    epsilon : target epsilon (epsilon > 0)
+    delta : target delta (0 < delta < 1)
+    GS : upper bound on L2 global sensitivity (GS >= 0)
+    tol : error tolerance for binary search (tol > 0)
+    Output:
+    sigma : standard deviation of Gaussian noise needed to achieve (epsilon,delta)-DP under global sensitivity GS
+    """
+
+    def Phi(t):
+        return 0.5*(1.0 + erf(float(t)/sqrt(2.0)))
+
+    def caseA(epsilon,s):
+        return Phi(sqrt(epsilon*s)) - exp(epsilon)*Phi(-sqrt(epsilon*(s+2.0)))
+
+    def caseB(epsilon,s):
+        return Phi(-sqrt(epsilon*s)) - exp(epsilon)*Phi(-sqrt(epsilon*(s+2.0)))
+
+    def doubling_trick(predicate_stop, s_inf, s_sup):
+        while(not predicate_stop(s_sup)):
+            s_inf = s_sup
+            s_sup = 2.0*s_inf
+        return s_inf, s_sup
+
+    def binary_search(predicate_stop, predicate_left, s_inf, s_sup):
+        s_mid = s_inf + (s_sup-s_inf)/2.0
+        while(not predicate_stop(s_mid)):
+            if (predicate_left(s_mid)):
+                s_sup = s_mid
+            else:
+                s_inf = s_mid
+            s_mid = s_inf + (s_sup-s_inf)/2.0
+        return s_mid
+
+    delta_thr = caseA(epsilon, 0.0)
+
+    if (delta == delta_thr):
+        alpha = 1.0
+
+    else:
+        if (delta > delta_thr):
+            predicate_stop_DT = lambda s : caseA(epsilon, s) >= delta
+            function_s_to_delta = lambda s : caseA(epsilon, s)
+            predicate_left_BS = lambda s : function_s_to_delta(s) > delta
+            function_s_to_alpha = lambda s : sqrt(1.0 + s/2.0) - sqrt(s/2.0)
+
+        else:
+            predicate_stop_DT = lambda s : caseB(epsilon, s) <= delta
+            function_s_to_delta = lambda s : caseB(epsilon, s)
+            predicate_left_BS = lambda s : function_s_to_delta(s) < delta
+            function_s_to_alpha = lambda s : sqrt(1.0 + s/2.0) + sqrt(s/2.0)
+
+        predicate_stop_BS = lambda s : abs(function_s_to_delta(s) - delta) <= tol
+
+        s_inf, s_sup = doubling_trick(predicate_stop_DT, 0.0, 1.0)
+        s_final = binary_search(predicate_stop_BS, predicate_left_BS, s_inf, s_sup)
+        alpha = function_s_to_alpha(s_final)
+
+    sigma = alpha*GS/sqrt(2.0*epsilon)
+
+    return sigma
+
+###########################################################################################################""
+
+def sigma_per_coord(sens, eps, delta):
+    d = len(sens)
+    sigma = np.zeros(d)
+    for i in range(d):
+        sigma[i] = calibrateAnalyticGaussianMechanism(eps, delta, sens[i])
+    return sigma
+
+def privatizer(x, sigma):
     n = len(x)
     z = np.zeros((n, 2))
     for i in range(n):
-        z[i,0] = x[i,0] + np.random.normal(0, np.sqrt(2*np.log(1.25/delta))*sens[0]/eps)
-        z[i,1] = x[i,1] + np.random.normal(0, np.sqrt(2*np.log(1.25/delta))*sens[1]/eps)
+        z[i,0] = x[i,0] + np.random.normal(0, sigma[0])
+        z[i,1] = x[i,1] + np.random.normal(0, sigma[1])
     return torch.from_numpy(z)
 
 def pdist(sample_1, sample_2, norm=2, eps=1e-5):
@@ -78,7 +150,7 @@ def pdist(sample_1, sample_2, norm=2, eps=1e-5):
         return (eps + inner) ** (1. / norm)
 
 #def permutation_test_mat(np.ndarray[np.float32_t, ndim=2] matrix, int n_1, int n_2, int n_permutations, float a00=1, float a11=1, float a01=0):
-def permutation_test_mat(matrix, n_1, n_2, n_permutations, a00=1, a11=1, a01=0):
+def permutation_test_mat(matrix, n_1, n_2, n_permutations=100, a00=1, a11=1, a01=0):
     """Compute the p-value of the following statistic (rejects when high)
         \sum_{i,j} a_{\pi(i), \pi(j)} matrix[i, j].
     """
@@ -176,7 +248,7 @@ class MMDStatistic:
         else:
             return mmd
 
-    def pval(self, distances, n_permutations=1000):
+    def pval(self, distances, n_permutations=100):
         r"""Compute a p-value using a permutation test.
         Arguments
         ---------
@@ -195,34 +267,81 @@ class MMDStatistic:
                                     n_permutations,
                                     a00=self.a00, a11=self.a11, a01=self.a01)
 
-def figures(n, sigma, eps, delta):
+def figures(n, sd, eps, delta, dist):
     label = [0]*n
-    X, y = data_moons(n,sigma)
+    X, y = data_moons(n, sd, dist)
     for i in range(n):
         label[i] = int((y[i]+1)/2)
     colors = np.array(['blue','red'])
-    plt.subplot(211)
+    mpl.style.use('seaborn-talk')
+    plt.subplot(221)
     plt.scatter(X[:,0], X[:,1], s=40, c=colors[label],edgecolors='black')
-    plt.subplot(212)
-    Z = privatizer(X, eps, delta)
+    plt.subplot(222)
+    sens = np.linalg.norm(np.array([2,1]), 2)
+    sigma = [np.sqrt(2*np.log(1.25/delta))*sens/eps]*2
+    Z = privatizer(X, sigma)
+    plt.scatter(Z[:,0], Z[:,1], s=40, c=colors[label],edgecolors='black')
+    plt.subplot(223)
+    sigma = [calibrateAnalyticGaussianMechanism(eps, delta, sens)]*2
+    Z = privatizer(X, sigma)
+    plt.scatter(Z[:,0], Z[:,1], s=40, c=colors[label],edgecolors='black')
+    plt.subplot(224)
+    sens = [2,1]
+    sigma = sigma_per_coord(sens, eps, delta)
+    Z = privatizer(X, sigma)
     plt.scatter(Z[:,0], Z[:,1], s=40, c=colors[label],edgecolors='black')
     plt.set_cmap('bwr')
+    plt.savefig('gaussian_mechanism_improved.pdf')
     plt.show()
 
-figures(300, 0.1, 10, 0.1)
+def simulate(n, sd, dist):
+    X, y = data_moons(n, sd, dist)
+    X1bis, ybis = data_moons(n, sd, dist)
+    X1 = torch.from_numpy(X[y==-1])
+    X2 = torch.from_numpy(X[y==1])
+    X1bis, ybis = data_moons(n, sd, dist)
+    X1bis = torch.from_numpy(X1bis[ybis==-1])
+    return X1, X1bis, X2
 
-x1, x1bis, x2 = generator(K, n)
-stat = MMDStatistic(n,n)
+figures(300, 0.1, 1, 0.1, 2)
+
+X1, X1bis, X2 = simulate(n, sd, 2)
+
+######################### NON PRIVATIZED ################################################
+stat = MMDStatistic(150, 150)
 alphas = [1e-3, 1e-2, 1e-1, 1, 5, 10, 15, 20, 25, 30, 1e2, 1e3]
-stat_x11, mmd_x11 = stat(x1, x1bis, alphas, ret_matrix = True)
+stat_x11, mmd_x11 = stat(X1, X1bis, alphas, ret_matrix = True)
 stat_x11, stat.pval(mmd_x11)
-stat_x12, mmd_x12 = stat(x1, x2, alphas, ret_matrix = True)
+stat_x12, mmd_x12 = stat(X1, X2, alphas, ret_matrix = True)
 stat_x12, stat.pval(mmd_x12)
 
-y1 = privatizer(x1, eps, K)
-y1bis = privatizer(x1bis, eps, K)
-y2 = privatizer(x2, eps, K)
-stat_y11, mmd_y11 = stat(y1, y1bis, alphas, ret_matrix = True)
-stat_y11, stat.pval(mmd_y11)
-stat_x12, mmd_y12 = stat(y1, y2, alphas, ret_matrix = True)
-stat_x12, stat.pval(mmd_y12)
+######################## PRIVATIZED ####################################################
+##### without Balle's algorithm
+sens = np.linalg.norm(np.array([2,1]), 2)
+sigma = [np.sqrt(2*np.log(1.25/delta))*sens/eps]*2
+Z1 = privatizer(X1, sigma)
+Z1bis = privatizer(X1bis, sigma)
+Z2 = privatizer(X2, sigma)
+stat_z11, mmd_z11 = stat(Z1, Z1bis, alphas, ret_matrix = True)
+stat_z11, stat.pval(mmd_z11)
+stat_z12, mmd_z12 = stat(Z1, Z2, alphas, ret_matrix = True)
+stat_z12, stat.pval(mmd_z12)
+#### with Balle's algorithm
+sigma = [calibrateAnalyticGaussianMechanism(eps, delta, sens)]*2
+Z1 = privatizer(X1, sigma)
+Z1bis = privatizer(X1bis, sigma)
+Z2 = privatizer(X2, sigma)
+stat_z11, mmd_z11 = stat(Z1, Z1bis, alphas, ret_matrix = True)
+stat_z11, stat.pval(mmd_z11)
+stat_z12, mmd_z12 = stat(Z1, Z2, alphas, ret_matrix = True)
+stat_z12, stat.pval(mmd_z12)
+#### with independance
+sens = [2,1]
+sigma = sigma_per_coord(sens, eps, delta)
+Z1 = privatizer(X1, sigma)
+Z1bis = privatizer(X1bis, sigma)
+Z2 = privatizer(X2, sigma)
+stat_z11, mmd_z11 = stat(Z1, Z1bis, alphas, ret_matrix = True)
+stat_z11, stat.pval(mmd_z11)
+stat_z12, mmd_z12 = stat(Z1, Z2, alphas, ret_matrix = True)
+stat_z12, stat.pval(mmd_z12)
