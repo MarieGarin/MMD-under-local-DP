@@ -1,4 +1,4 @@
-import numpy as np
+ import numpy as np
 import scipy
 import random
 import matplotlib.pyplot as plt
@@ -303,9 +303,9 @@ def simulate(n, sd, dist):
     X1bis = torch.from_numpy(X1bis[ybis==-1])
     return X1, X1bis, X2
 
-figures(300, 0.1, 1, 0.1, 2)
+figures(300, 0.1, 1, 0.1, 0)
 
-X1, X1bis, X2 = simulate(n, sd, 2)
+X1, X1bis, X2 = simulate(n, sd, 0)
 
 ######################### NON PRIVATIZED ################################################
 stat = MMDStatistic(150, 150)
@@ -325,6 +325,11 @@ Z2 = privatizer(X2, sigma)
 stat_z11, mmd_z11 = stat(Z1, Z1bis, alphas, ret_matrix = True)
 stat_z11, stat.pval(mmd_z11)
 stat_z12, mmd_z12 = stat(Z1, Z2, alphas, ret_matrix = True)
+stat_z12, stat.pval(mmd_z12)
+
+bigZ1 = torch.cat([Z1, Z1bis])
+stat = MMDStatistic(300, 150)
+stat_z12, mmd_z12 = stat(bigZ1, Z2, alphas, ret_matrix = True)
 stat_z12, stat.pval(mmd_z12)
 #### with Balle's algorithm
 sigma = [calibrateAnalyticGaussianMechanism(eps, delta, sens)]*2
